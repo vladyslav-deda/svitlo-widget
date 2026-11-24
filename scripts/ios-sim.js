@@ -41,11 +41,15 @@ class DrawContext { constructor() { this.ops = []; this.cur = ''; this.fillC = '
   fillRect(r) { this.ops.push(`<rect x="${r.x}" y="${r.y}" width="${r.width}" height="${r.height}" fill="${this.fillC}"/>`); }
   fillEllipse(r) { this.ops.push(`<ellipse cx="${r.x + r.width / 2}" cy="${r.y + r.height / 2}" rx="${r.width / 2}" ry="${r.height / 2}" fill="${this.fillC}"/>`); }
   strokeEllipse(r) { this.ops.push(`<ellipse cx="${r.x + r.width / 2}" cy="${r.y + r.height / 2}" rx="${r.width / 2}" ry="${r.height / 2}" fill="none" stroke="${this.strokeC}" stroke-width="${this.lw}"/>`); }
+  setFont(f) { this.font = f; } setFontSize(n) { this.font = { name: 'regular', size: n }; } setTextColor(c) { this.textC = c.css(); }
+  setTextAlignedLeft() { this.ta = 'start'; } setTextAlignedCenter() { this.ta = 'middle'; } setTextAlignedRight() { this.ta = 'end'; }
+  drawTextInRect(t, r) { const f = this.font || { size: 12 }, ta = this.ta || 'start', x = ta === 'middle' ? r.x + r.width / 2 : ta === 'end' ? r.x + r.width : r.x;
+    this.ops.push(`<text x="${x}" y="${r.y + f.size}" font-size="${f.size}" font-weight="${/bold|heavy/i.test(f.name) ? 700 : 400}" font-family="-apple-system,sans-serif" text-anchor="${ta}" fill="${this.textC || 'black'}">${t}</text>`); }
   getImage() { const s = this.size; return { svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${s.width}" height="${s.height}" viewBox="0 0 ${s.width} ${s.height}">${this.ops.join('')}</svg>`, size: s }; } }
 
 class Node { constructor(kind) { this.kind = kind; this.items = []; this.vertical = kind !== 'stack'; }
-  addText(t) { const n = { kind: 'text', text: t }; this.items.push(n); return n; }
-  addDate(d) { const n = { kind: 'date', date: d, style: 'date', applyTimerStyle() { this.style = 'timer'; }, applyRelativeStyle() { this.style = 'relative'; } }; this.items.push(n); return n; }
+  addText(t) { const n = { kind: 'text', text: t, centerAlignText() { this.ta = 'center'; }, rightAlignText() { this.ta = 'right'; }, leftAlignText() { this.ta = 'left'; } }; this.items.push(n); return n; }
+  addDate(d) { const n = { kind: 'date', date: d, style: 'date', applyTimerStyle() { this.style = 'timer'; }, applyRelativeStyle() { this.style = 'relative'; }, centerAlignText() { this.ta = 'center'; }, rightAlignText() { this.ta = 'right'; }, leftAlignText() { this.ta = 'left'; } }; this.items.push(n); return n; }
   addImage(img) { const n = { kind: 'image', image: img }; this.items.push(n); return n; }
   addSpacer(len) { this.items.push({ kind: 'spacer', len }); }
   addStack() { const s = new Node('stack'); this.items.push(s); return s; }
@@ -54,7 +58,8 @@ class Node { constructor(kind) { this.kind = kind; this.items = []; this.vertica
   setPadding(t, l, b, r) { this.padding = [t, r, b, l]; } }
 let shown = null;
 class ListWidget extends Node { constructor() { super('widget'); }
-  async presentSmall() { shown = { w: this, fam: 'small' }; } async presentMedium() { shown = { w: this, fam: 'medium' }; } async presentLarge() { shown = { w: this, fam: 'large' }; } }
+  async presentSmall() { shown = { w: this, fam: 'small' }; } async presentMedium() { shown = { w: this, fam: 'medium' }; } async presentLarge() { shown = { w: this, fam: 'large' }; }
+  async presentAccessoryCircular() { shown = { w: this, fam: 'accessoryCircular' }; } }
 
 const files = {};
 const fmImpl = { joinPath: (a, b) => path.join(a, b), fileExists: (p) => fs.existsSync(p), readString: (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null),
@@ -70,6 +75,7 @@ const ctxDir = path.join(tmp, 'svitlo'); fs.mkdirSync(ctxDir, { recursive: true 
 fs.writeFileSync(path.join(ctxDir, 'config.json'), CONFIG);
 const widgetMode = opt('app', false) ? false : true;
 const sandbox = {
+  Intl,
   console, Intl, JSON, Math, Promise, Object, Array, String, Number, Error, encodeURIComponent, parseInt,
   Date: FakeDate, Color, Font, Point, Size, Rect, Path, DrawContext, ListWidget, FileManager, Request,
   URLScheme: { forRunningScript: () => 'scriptable:///run/Svitlo' },
@@ -83,27 +89,35 @@ vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'ios/core.js'), 'utf8'), sandbox, { filename: 'core.js' });
 
 // ---------- render to HTML ----------
-const SIZES = { small: [170, 170], medium: [364, 170], large: [364, 382] };
+const SIZES = { small: [170, 170], medium: [364, 170], large: [364, 382], accessoryCircular: [72, 72], accessoryRectangular: [172, 76], accessoryInline: [240, 24] };
 function fmtTimer(d) { let s = Math.max(0, Math.round((d - NOW) / 1000)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; s %= 60;
   return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); }
 const fontCss = (f) => f ? `font-size:${f.size}px;font-weight:${/heavy|black/i.test(f.name) ? 800 : /bold/i.test(f.name) ? 700 : /semibold/i.test(f.name) ? 600 : 400};${/Rounded/.test(f.name) ? 'font-family:ui-rounded,-apple-system,sans-serif;' : ''}` : '';
 function render(n) {
   if (n.kind === 'text' || n.kind === 'date') {
     const t = n.kind === 'text' ? n.text : n.style === 'timer' ? fmtTimer(n.date) : String(n.date);
-    return `<div style="${fontCss(n.font)}color:${n.textColor ? n.textColor.css() : 'inherit'};white-space:${n.lineLimit === 1 ? 'nowrap' : 'normal'};overflow:hidden;text-overflow:ellipsis">${t.replace(/</g, '&lt;')}</div>`;
+    return `<div style="${fontCss(n.font)}${n.ta ? 'text-align:' + n.ta + ';align-self:stretch;' : ''}${n.textOpacity != null ? 'opacity:' + n.textOpacity + ';' : ''}color:${n.textColor ? n.textColor.css() : 'inherit'};white-space:${n.lineLimit === 1 ? 'nowrap' : 'normal'};overflow:hidden;text-overflow:ellipsis">${t.replace(/</g, '&lt;')}</div>`;
   }
   if (n.kind === 'spacer') return n.len == null ? '<div style="flex:1"></div>' : `<div style="flex:0 0 ${n.len}px"></div>`;
   if (n.kind === 'image') { const s = n.imageSize || n.image.size; return `<img style="width:${s.width}px;height:${s.height}px" src="data:image/svg+xml;utf8,${encodeURIComponent(n.image.svg)}">`; }
   const p = n.padding ? `padding:${n.padding.join('px ')}px;` : '';
-  return `<div style="display:flex;flex-direction:${n.vertical ? 'column' : 'row'};align-items:${n.align || (n.vertical ? 'flex-start' : 'center')};${p}${n.kind === 'stack' ? '' : 'flex:1;'}min-width:0">${n.items.map(render).join('')}</div>`;
+  const sz = n.size ? `${n.size.width > 0 ? 'width:' + n.size.width + 'px;flex:none;' : ''}${n.size.height > 0 ? 'height:' + n.size.height + 'px;' : ''}box-sizing:border-box;` : '';
+  const bg = (n.backgroundColor ? 'background-color:' + n.backgroundColor.css() + ';' : '') + (n.backgroundImage ? `background-image:url('data:image/svg+xml;utf8,${encodeURIComponent(n.backgroundImage.svg)}');background-size:100% 100%;` : '') + (n.cornerRadius ? 'border-radius:' + n.cornerRadius + 'px;overflow:hidden;' : '');
+  const al = n.align || (n.vertical ? 'flex-start' : 'center');
+  return `<div style="display:flex;flex-direction:${n.vertical ? 'column' : 'row'};align-items:${al};${p}${sz}${bg}${n.kind === 'stack' ? '' : 'flex:1;'}min-width:0">${n.items.map(render).join('')}</div>`;
 }
 
 (async () => {
-  await sandbox.module.exports.run({ fm: fmImpl, dir: ctxDir, scriptName: 'Svitlo' });
+  const STYLE = opt('style', null);
+  if (STYLE) { // render a specific style directly (bypasses the saved choice)
+    const t = sandbox.module.exports._test, st = t.store({ fm: fmImpl, dir: ctxDir });
+    const fam = opt('family', 'small');
+    shown = { w: await t.buildWidget(st, await st.loadConfig(), fam, STYLE), fam };
+  } else await sandbox.module.exports.run({ fm: fmImpl, dir: ctxDir, scriptName: 'Svitlo' });
   if (!shown) throw new Error('no widget produced');
   const [W, H] = SIZES[shown.fam] || SIZES.small, w = shown.w;
   const html = `<body style="margin:0;padding:24px;background:${DARK ? '#3a3f4a' : '#c9d3e6'};font-family:-apple-system,sans-serif">
-<div style="width:${W}px;height:${H}px;border-radius:22px;overflow:hidden;display:flex;flex-direction:column;background:${w.backgroundColor ? w.backgroundColor.css() : '#fff'};${w.padding ? 'padding:' + w.padding.join('px ') + 'px;' : 'padding:16px;'}box-sizing:border-box">${w.items.map(render).join('')}</div>
+<div style="width:${W}px;height:${H}px;border-radius:${shown.fam === 'accessoryCircular' ? '50%' : '22px'};overflow:hidden;display:flex;flex-direction:column;background:${w.backgroundColor ? w.backgroundColor.css() : (/accessory/.test(shown.fam) ? 'rgba(255,255,255,.12)' : '#fff')};${w.backgroundImage ? `background-image:url('data:image/svg+xml;utf8,${encodeURIComponent(w.backgroundImage.svg)}');background-size:100% 100%;` : ''}${/accessory/.test(shown.fam) ? 'color:#fff;' : ''}${w.padding ? 'padding:' + w.padding.join('px ') + 'px;' : 'padding:16px;'}box-sizing:border-box">${w.items.map(render).join('')}</div>
 <pre style="font-size:11px">${shown.fam} · refreshAfter ${w.refreshAfterDate ? w.refreshAfterDate.toISOString() : '-'} · url ${w.url || '-'}</pre></body>`;
   fs.writeFileSync(OUT, html);
   console.log('ok', shown.fam, OUT);

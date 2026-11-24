@@ -1,15 +1,27 @@
 // Svitlo for Scriptable (iOS). Built into ios/core.js together with src/schedule.js (as `S`).
 // Entry point: module.exports.run({ fm, dir, scriptName }) — called by the loader ios/Svitlo.js.
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 // ---------- palette (same tokens as the desktop popover) ----------
+// Drawn images bake their colours at draw time (no dynamic colours inside DrawContext), so everything
+// drawn uses colours that read on both the light and the dark widget background.
 const C = {
   amber: '#F5B83D',
   bg: ['#FBFBFD', '#1F2024'], fg: ['#15171B', '#F2F3F5'], muted: ['#5B616C', '#A9AEB6'],
-  off: '#2A2D33', marker: '#E5484D',
+  heroOn: ['#FFF3D6', '#3A3220'], heroOff: '#16181C',
+  off: '#2A2D33', offRing: '#6A707A', marker: '#E5484D', mark: '#8E939B', track: '#8E939B',
 };
 const dyn = (pair) => Color.dynamic(new Color(pair[0]), new Color(pair[1]));
+
+// ---------- styles ----------
+// per size: id -> [name shown in the menu, words accepted in the widget Parameter]
+const STYLES = {
+  small: { countdown: ['Відлік', ['відлік', 'countdown']], timer: ['Кільце-таймер', ['таймер', 'timer']], ring: ['Кільце доби', ['кільце', 'доба', 'ring']], tile: ['Плитка стану', ['плитка', 'tile']] },
+  medium: { line: ['Лінія доби', ['лінія', 'line']], twodays: ['Сьогодні й завтра', ['завтра', 'дві', 'twodays']], next: ['Що далі', ['далі', 'список', 'next']] },
+  large: { mac: ['Як вікно на Mac', ['mac', 'мак', 'вікно']], twodays: ['Дві доби', ['дві', 'завтра', 'twodays']] },
+};
+const DEFAULT_STYLE = { small: 'countdown', medium: 'line', large: 'mac' };
 
 // ---------- storage ----------
 function store(ctx) {
@@ -18,107 +30,54 @@ function store(ctx) {
   const cfgFile = ctx.fm.joinPath(ctx.dir, 'config.json');
   return {
     async loadConfig() {
-      const def = { queues: [], active: 0 };
+      const def = { queues: [], active: 0, styles: {} };
       try {
         if (!ctx.fm.fileExists(cfgFile)) return def;
         if (!ctx.fm.isFileDownloaded(cfgFile)) await ctx.fm.downloadFileFromiCloud(cfgFile);
         const c = JSON.parse(ctx.fm.readString(cfgFile));
         c.queues = (c.queues || []).filter((q) => q && S.QUEUE_IDS.includes(q.id));
         if (!(c.active >= 0 && c.active < c.queues.length)) c.active = 0;
-        return Object.assign(def, c);
+        return Object.assign(def, c, { styles: Object.assign({}, c.styles) });
       } catch (e) { return def; }
     },
     saveConfig(c) { ctx.fm.writeString(cfgFile, JSON.stringify(c, null, 2)); },
     async loadData() {
-      let json = null, fresh = false;
+      let json = null;
       try {
         const r = new Request(S.SOURCE_URL + '?t=' + Date.now());
         r.timeoutInterval = 12;
         const text = await r.loadString();
         const j = JSON.parse(text);
-        if (j && j.fact && j.fact.data) { json = j; fresh = true; local.writeString(cacheFile, text); }
+        if (j && j.fact && j.fact.data) { json = j; local.writeString(cacheFile, text); }
       } catch (e) { /* offline -> cache */ }
       if (!json && local.fileExists(cacheFile)) { try { json = JSON.parse(local.readString(cacheFile)); } catch (e) { /* broken cache */ } }
-      return { parsed: json ? S.parseSource(json) : null, fresh: fresh };
+      return json ? S.parseSource(json) : null;
     },
   };
 }
 
-// Widget parameter: queue name or id, in any case, e.g. "Батьки" / "3.1"
-function pickQueue(cfg, param) {
-  const p = String(param || '').trim().toLowerCase();
-  if (p) {
-    const byName = cfg.queues.find((q) => q.name.toLowerCase() === p);
-    if (byName) return byName;
-    const id = (p.match(/\b([1-6])[.,]([12])\b/) || []).slice(1).join('.');
-    if (S.QUEUE_IDS.includes(id)) return cfg.queues.find((q) => q.id === id) || { name: 'Черга', id: id };
-  }
-  return cfg.queues[cfg.active] || null;
-}
-
-// ---------- drawing ----------
-function boltPoints(x, y, s) { // 24x24 design grid -> rect at (x,y) of size s
-  const k = s / 24;
-  return [[13.5, 2], [4, 13.5], [11, 13.5], [10, 22], [19.5, 10.5], [12.5, 10.5]].map((p) => new Point(x + p[0] * k, y + p[1] * k));
-}
-
-function drawIcon(off, size) {
-  const d = new DrawContext();
-  d.size = new Size(size, size); d.opaque = false; d.respectScreenScale = true;
-  d.setFillColor(new Color(off ? C.off : C.amber));
-  d.fillEllipse(new Rect(0, 0, size, size));
-  const p = new Path(); p.addLines(boltPoints(size * 0.2, size * 0.2, size * 0.6)); p.closeSubpath();
-  d.addPath(p); d.setFillColor(new Color(off ? '#FFFFFF' : '#15171B')); d.fillPath();
-  if (off) { // slash
-    const s = new Path(); s.move(new Point(size * 0.24, size * 0.24)); s.addLine(new Point(size * 0.76, size * 0.76));
-    d.addPath(s); d.setStrokeColor(new Color(C.off)); d.setLineWidth(size * 0.16); d.strokePath();
-    d.addPath(s); d.setStrokeColor(new Color('#FFFFFF')); d.setLineWidth(size * 0.07); d.strokePath();
-  }
-  return d.getImage();
-}
-
-// Diagonal hatch lines inside a rect (no clipping in DrawContext, so intersect each line with the rect by hand)
-function hatch(d, r, step, color, width) {
-  d.setStrokeColor(color); d.setLineWidth(width);
-  for (let c = r.x - r.height; c < r.x + r.width; c += step) {
-    // line x = c + (y - r.y), y in [r.y, r.y+h]  -> clip x to [r.x, r.x+w]
-    let y0 = r.y, y1 = r.y + r.height, x0 = c, x1 = c + r.height;
-    if (x0 < r.x) { y0 += r.x - x0; x0 = r.x; }
-    if (x1 > r.x + r.width) { y1 -= x1 - (r.x + r.width); x1 = r.x + r.width; }
-    if (y1 - y0 < 0.5) continue;
-    const p = new Path(); p.move(new Point(x0, y1)); p.addLine(new Point(x1, y0));
-    d.addPath(p); d.strokePath();
-  }
-}
-
-// 24h bar: on = amber, off = dark + hatch (+ thin light outline so it reads on a dark widget too); now marker
-function drawBar(list, minutes, isToday, w, h) {
-  const pad = 4; // room for the marker dot
-  const d = new DrawContext();
-  d.size = new Size(w, h + pad * 2); d.opaque = false; d.respectScreenScale = true;
-  const segs = []; let cur = 0;
-  (list || []).forEach((iv) => { if (iv[0] > cur) segs.push([cur, iv[0], false]); segs.push([iv[0], iv[1], true]); cur = iv[1]; });
-  if (cur < 1440) segs.push([cur, 1440, false]);
-  const rad = Math.min(3, h / 2);
-  segs.forEach((s) => {
-    const x = s[0] / 1440 * w + 1, sw = (s[1] - s[0]) / 1440 * w - 2;
-    if (sw <= 0) return;
-    const past = isToday && s[1] <= minutes, a = past ? 0.38 : 1;
-    const r = new Rect(x, pad, sw, h);
-    const p = new Path(); p.addRoundedRect(r, Math.min(rad, sw / 2), Math.min(rad, sw / 2));
-    d.addPath(p); d.setFillColor(new Color(s[2] ? C.off : C.amber, a)); d.fillPath();
-    if (s[2]) {
-      hatch(d, new Rect(x + 1, pad + 1, sw - 2, h - 2), 5, new Color('#FFFFFF', 0.16 * a), 1.5);
-      d.addPath(p); d.setStrokeColor(new Color('#FFFFFF', 0.14 * a)); d.setLineWidth(1); d.strokePath();
-    }
+// Widget Parameter: queue (name or id) and/or style word, in any order and case: "Батьки", "3.1", "таймер", "Батьки, таймер"
+function parseParam(cfg, param, family) {
+  let raw = String(param || '').toLowerCase();
+  // queue number first ("3.1", "3,1"), so the comma in it is not taken for a separator
+  const m = raw.match(/(^|[^\d])([1-6])\s*[.,]\s*([12])(?!\d)/);
+  const idInParam = m ? m[2] + '.' + m[3] : null;
+  if (m) raw = raw.replace(m[0], m[1] + ' ');
+  const words = raw.split(/[,;]+|\s+/).map((x) => x.trim()).filter(Boolean);
+  const famStyles = STYLES[family] || {};
+  let style = null, q = null;
+  const rest = [];
+  words.forEach((w) => {
+    const hit = Object.keys(famStyles).find((id) => famStyles[id][1].some((k) => w.indexOf(k) === 0));
+    if (hit && !style) style = hit; else rest.push(w);
   });
-  if (isToday) {
-    const mx = minutes / 1440 * w;
-    d.setFillColor(new Color(C.marker));
-    d.fillRect(new Rect(mx - 1, 1, 2, h + pad * 2 - 2));
-    d.fillEllipse(new Rect(mx - 3.5, 0, 7, 7));
-  }
-  return d.getImage();
+  const p = rest.join(' ');
+  if (p) q = cfg.queues.find((x) => x.name.toLowerCase() === p) || null;
+  if (!q && idInParam && S.QUEUE_IDS.includes(idInParam)) q = cfg.queues.find((x) => x.id === idInParam) || { name: 'Черга', id: idInParam };
+  return {
+    queue: q || cfg.queues[cfg.active] || null,
+    style: style || (cfg.styles && famStyles[cfg.styles[family]] ? cfg.styles[family] : DEFAULT_STYLE[family]),
+  };
 }
 
 // ---------- model ----------
@@ -129,34 +88,236 @@ function model(parsed, q, now) {
   const v = S.queueView(parsed, q.id, now);
   if (!v.today || !v.status) return { v: v, unknown: true };
   const s = v.status, m = v.minutes;
-  const until = s.until; // minutes from today's midnight, may exceed 1440, null = no more changes known
+  const until = s.until; // minutes from today's midnight, may exceed 1440; null = no more changes known
   const at = until == null ? null : new Date(now.getTime() + (until - m) * 60000 - now.getSeconds() * 1000);
+  // start of the current on/off period (for the timer ring)
+  let from = 0;
+  if (s.off) from = s.start;
+  else v.today.forEach((iv) => { if (iv[1] <= m) from = iv[1]; });
+  const next = v.today.filter((iv) => iv[1] > m).map((iv) => ({ iv: iv, tom: false }))
+    .concat((v.tomorrow || []).map((iv) => ({ iv: iv, tom: true })));
   return {
-    v: v, off: s.off, until: until, at: at, left: until == null ? null : until - m,
+    v: v, m: m, off: s.off, until: until, at: at, left: until == null ? null : until - m, from: from, next: next,
     title: s.off ? 'Світла немає' : 'Світло є',
     sub: until == null ? 'сьогодні більше без відключень' : (s.off ? 'увімкнуть ' : 'вимкнуть ') + (s.tomorrow ? 'завтра ' : '') + 'о ' + S.hm(until),
+    verb: s.off ? 'увімкнуть' : 'вимкнуть',
     cdl: s.off ? 'до увімкнення' : 'до вимкнення',
+    untilShort: until == null ? null : (s.tomorrow ? 'завтра ' : '') + S.hm(until),
   };
 }
+function totalOff(list) { return (list || []).reduce((a, iv) => a + iv[1] - iv[0], 0); }
+function dayLabel(now, add) {
+  const d = new Date(now.getTime() + add * 86400000);
+  return ['нд', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][kyivWeekday(d)] + ' ' + Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Kyiv', day: 'numeric' }).format(d));
+}
+function kyivWeekday(d) {
+  const w = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Kyiv', weekday: 'short' }).format(d);
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(w);
+}
 
-// ---------- widgets ----------
-function baseWidget(ctx) {
+// ---------- drawing ----------
+function ctxOf(w, h) { const d = new DrawContext(); d.size = new Size(w, h); d.opaque = false; d.respectScreenScale = true; return d; }
+
+function boltPoints(x, y, s) { // 24x24 design grid -> rect at (x,y) of size s
+  const k = s / 24;
+  return [[13.5, 2], [4, 13.5], [11, 13.5], [10, 22], [19.5, 10.5], [12.5, 10.5]].map((p) => new Point(x + p[0] * k, y + p[1] * k));
+}
+function drawBolt(d, off, x, y, size, mono) {
+  const p = new Path(); p.addLines(boltPoints(x, y, size)); p.closeSubpath();
+  d.addPath(p); d.setFillColor(new Color(mono ? '#FFFFFF' : off ? '#FFFFFF' : '#15171B')); d.fillPath();
+  if (off) {
+    const s = new Path(); s.move(new Point(x + size * 0.07, y + size * 0.07)); s.addLine(new Point(x + size * 0.93, y + size * 0.93));
+    if (!mono) { d.addPath(s); d.setStrokeColor(new Color(C.off)); d.setLineWidth(size * 0.26); d.strokePath(); }
+    d.addPath(s); d.setStrokeColor(new Color('#FFFFFF')); d.setLineWidth(size * 0.11); d.strokePath();
+  }
+}
+function drawIcon(off, size) {
+  const d = ctxOf(size, size);
+  d.setFillColor(new Color(off ? C.off : C.amber));
+  d.fillEllipse(new Rect(0, 0, size, size));
+  drawBolt(d, off, size * 0.2, size * 0.2, size * 0.6);
+  return d.getImage();
+}
+
+// Diagonal hatch lines inside a rect (DrawContext has no clipping, so each line is cut to the rect by hand)
+function hatch(d, r, step, color, width) {
+  d.setStrokeColor(color); d.setLineWidth(width);
+  // 45° lines from bottom-left (c, bottom) to top-right (c + h, top), cut to the rect
+  for (let c = r.x - r.height; c < r.x + r.width; c += step) {
+    let x0 = c, y0 = r.y + r.height, x1 = c + r.height, y1 = r.y;
+    if (x0 < r.x) { y0 -= r.x - x0; x0 = r.x; }
+    if (x1 > r.x + r.width) { y1 += x1 - (r.x + r.width); x1 = r.x + r.width; }
+    if (y0 - y1 < 0.5) continue;
+    const p = new Path(); p.move(new Point(x0, y0)); p.addLine(new Point(x1, y1));
+    d.addPath(p); d.strokePath();
+  }
+}
+
+// Boundary labels under the bar: only times when power goes off / comes back (+00 / 24 when free).
+// Two labels that would collide drop the second one to a second row (same rule as the desktop app).
+function markLayout(list, w) {
+  const pts = [];
+  (list || []).forEach((iv) => { pts.push(iv[0]); pts.push(iv[1]); });
+  const edges = [];
+  if (!pts.length || pts[0] / 1440 * w > 22) edges.push(0);
+  if (!pts.length || (1440 - pts[pts.length - 1]) / 1440 * w > 22) edges.push(1440);
+  const all = pts.concat(edges).sort((a, b) => a - b).filter((m, i, a) => a.indexOf(m) === i);
+  const last = [-99, -99], out = [];
+  all.forEach((m) => {
+    const x = m / 1440 * w, lab = m === 1440 ? '24' : m % 60 ? S.hm(m) : pad2(Math.floor(m / 60)), lw = lab.length * 5.2 + 4;
+    let row = 0;
+    if (x - lw / 2 < last[0] + 2) row = 1;
+    last[row] = x + lw / 2;
+    out.push({ m: m, x: x, lab: lab, row: row, end: edges.indexOf(m) >= 0 });
+  });
+  return out;
+}
+
+// 24h bar: on = amber, off = dark + hatch (+ thin light outline so it reads on a dark widget too),
+// optional hour notches, now marker, boundary labels. Returns { img, h } where h = drawn height.
+function drawBar(list, o) {
+  const w = o.w, h = o.h, top = 4, isToday = o.isToday !== false, mono = !!o.mono;
+  const marks = o.marks ? markLayout(list, w) : [];
+  const rows = marks.some((x) => x.row) ? 2 : marks.length ? 1 : 0;
+  const H = top + h + (rows ? 3 + rows * 11 : 2);
+  const d = ctxOf(w, H);
+  const segs = []; let cur = 0;
+  (list || []).forEach((iv) => { if (iv[0] > cur) segs.push([cur, iv[0], false]); segs.push([iv[0], iv[1], true]); cur = iv[1]; });
+  if (cur < 1440) segs.push([cur, 1440, false]);
+  const rad = Math.min(3, h / 2);
+  segs.forEach((s) => {
+    const x = s[0] / 1440 * w + 1, sw = (s[1] - s[0]) / 1440 * w - 2;
+    if (sw <= 0) return;
+    const past = isToday && s[1] <= o.m, a = past ? 0.38 : 1;
+    const r = new Rect(x, top, sw, h);
+    const p = new Path(); p.addRoundedRect(r, Math.min(rad, sw / 2), Math.min(rad, sw / 2));
+    d.addPath(p);
+    if (mono) d.setFillColor(new Color('#FFFFFF', s[2] ? 0.25 : 0.95 * a));
+    else d.setFillColor(new Color(s[2] ? C.off : C.amber, a));
+    d.fillPath();
+    if (s[2] && !mono) {
+      hatch(d, new Rect(x + 1, top + 1, sw - 2, h - 2), 5, new Color('#FFFFFF', 0.16 * a), 1.5);
+      d.addPath(p); d.setStrokeColor(new Color('#FFFFFF', 0.14 * a)); d.setLineWidth(1); d.strokePath();
+    }
+    if (o.notches && !s[2] && !mono) { // hour notches inside on-blocks
+      d.setFillColor(new Color('#FFFFFF', 0.55 * a));
+      for (let k = Math.ceil(s[0] / 60) * 60; k < s[1]; k += 60) if (k > s[0]) d.fillRect(new Rect(k / 1440 * w - 0.5, top + h * 0.25, 1, h * 0.5));
+    }
+  });
+  if (isToday && o.m != null) {
+    const mx = o.m / 1440 * w;
+    d.setFillColor(new Color(mono ? '#FFFFFF' : C.marker));
+    d.fillRect(new Rect(mx - 1, 1, 2, h + top + 1));
+    d.fillEllipse(new Rect(mx - 3.5, 0, 7, 7));
+  }
+  if (marks.length) {
+    d.setFont(Font.boldSystemFont(9));
+    marks.forEach((k) => {
+      const past = isToday && k.m <= o.m;
+      d.setTextColor(new Color(C.mark, past ? 0.55 : 1));
+      const y = top + h + 3 + k.row * 11;
+      if (k.m === 0) { d.setTextAlignedLeft(); d.drawTextInRect(k.lab, new Rect(0, y, 30, 11)); }
+      else if (k.m === 1440) { d.setTextAlignedRight(); d.drawTextInRect(k.lab, new Rect(w - 30, y, 30, 11)); }
+      else { d.setTextAlignedCenter(); d.drawTextInRect(k.lab, new Rect(k.x - 20, y, 40, 11)); }
+    });
+  }
+  return { img: d.getImage(), h: H };
+}
+function addBar(stack, list, o) { const b = drawBar(list, o); stack.addImage(b.img).imageSize = new Size(o.w, b.h); }
+
+// circle approximated by line segments (no arc primitive in Path)
+function arc(cx, cy, r, a0, a1) {
+  const p = new Path(), n = Math.max(2, Math.ceil(Math.abs(a1 - a0) / (Math.PI / 90)));
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + (a1 - a0) * i / n, pt = new Point(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    if (i) p.addLine(pt); else p.move(pt);
+  }
+  return p;
+}
+const ang = (min) => min / 1440 * 2 * Math.PI - Math.PI / 2;
+
+// 24h dial: on = amber, off = dark; 00/06/12/18 labels inside; now tick
+function drawDayRing(list, m, size, sw, labels) {
+  const d = ctxOf(size, size), c = size / 2, r = (size - sw) / 2 - 1;
+  d.setLineWidth(sw);
+  d.addPath(arc(c, c, r, 0, 2 * Math.PI)); d.setStrokeColor(new Color(C.amber)); d.strokePath();
+  (list || []).forEach((iv) => { d.addPath(arc(c, c, r, ang(iv[0]), ang(iv[1]))); d.setStrokeColor(new Color(C.off)); d.strokePath(); });
+  // thin separators at 00/06/12/18 + labels
+  if (labels) {
+    d.setFont(Font.boldSystemFont(8.5)); d.setTextColor(new Color(C.mark)); d.setTextAlignedCenter();
+    [[0, '00'], [360, '06'], [720, '12'], [1080, '18']].forEach((L) => {
+      const a = ang(L[0]), rr = r - sw / 2 - 8;
+      d.drawTextInRect(L[1], new Rect(c + rr * Math.cos(a) - 10, c + rr * Math.sin(a) - 5.5, 20, 11));
+    });
+  }
+  const a = ang(m), p = new Path();
+  p.move(new Point(c + (r - sw / 2 - 2) * Math.cos(a), c + (r - sw / 2 - 2) * Math.sin(a)));
+  p.addLine(new Point(c + (r + sw / 2 + 1) * Math.cos(a), c + (r + sw / 2 + 1) * Math.sin(a)));
+  d.addPath(p); d.setStrokeColor(new Color(C.marker)); d.setLineWidth(3); d.strokePath();
+  return d.getImage();
+}
+
+// Timer ring: what is left of the current on/off period; empties towards the next switch.
+function drawTimerRing(md, size, sw, mono) {
+  const d = ctxOf(size, size), c = size / 2, r = (size - sw) / 2 - 1;
+  const total = (md.m - md.from) + (md.left || 0), frac = md.left == null ? 1 : Math.max(0.02, Math.min(1, md.left / Math.max(1, total)));
+  d.setLineWidth(sw);
+  d.addPath(arc(c, c, r, 0, 2 * Math.PI)); d.setStrokeColor(new Color(mono ? '#FFFFFF' : C.track, mono ? 0.25 : 0.22)); d.strokePath();
+  d.addPath(arc(c, c, r, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI));
+  const fg = mono ? '#FFFFFF' : md.off ? C.offRing : C.amber; // dark "off" would vanish on a dark widget
+  d.setStrokeColor(new Color(fg)); d.strokePath();
+  // round caps by hand
+  [-Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI].forEach((a) => {
+    d.setFillColor(new Color(fg));
+    d.fillEllipse(new Rect(c + r * Math.cos(a) - sw / 2, c + r * Math.sin(a) - sw / 2, sw, sw));
+  });
+  return d.getImage();
+}
+
+// Full-bleed background for the "tile" look: amber glow when on, dark hatch when off
+function drawTileBg(off, w, h) {
+  const d = ctxOf(w, h);
+  if (off) {
+    d.setFillColor(new Color(C.heroOff)); d.fillRect(new Rect(0, 0, w, h));
+    hatch(d, new Rect(0, 0, w, h), 10, new Color('#FFFFFF', 0.08), 4);
+  } else {
+    for (let i = 12; i >= 1; i--) { // soft radial glow, top-left
+      const rr = w * 0.09 * i;
+      d.setFillColor(new Color(C.amber, 0.06));
+      d.fillEllipse(new Rect(w * 0.25 - rr, h * 0.22 - rr, rr * 2, rr * 2));
+    }
+  }
+  return d.getImage();
+}
+
+// ---------- widget building blocks ----------
+function baseWidget() {
   const w = new ListWidget();
   w.backgroundColor = dyn(C.bg);
   w.setPadding(14, 14, 14, 14);
   w.url = URLScheme.forRunningScript();
   return w;
 }
+const FONTS = { heavy: (s) => Font.heavyRoundedSystemFont(s), bold: (s) => Font.boldSystemFont(s), semibold: (s) => Font.semiboldSystemFont(s), regular: (s) => Font.systemFont(s) };
 function text(stack, str, size, weight, color) {
   const t = stack.addText(str);
-  t.font = weight === 'heavy' ? Font.heavyRoundedSystemFont(size) : weight === 'bold' ? Font.boldSystemFont(size) : weight === 'semibold' ? Font.semiboldSystemFont(size) : Font.systemFont(size);
+  t.font = (FONTS[weight] || FONTS.regular)(size);
   t.textColor = color || dyn(C.fg);
   t.lineLimit = 1; t.minimumScaleFactor = 0.6;
   return t;
 }
+function timer(stack, md, size, color) {
+  const dt = stack.addDate(md.at); dt.applyTimerStyle();
+  dt.font = Font.heavyRoundedSystemFont(size); dt.textColor = color || dyn(C.fg); dt.lineLimit = 1; dt.minimumScaleFactor = 0.5;
+  return dt;
+}
+function hstack(parent) { const s = parent.addStack(); s.layoutHorizontally(); s.centerAlignContent(); return s; }
+function vstack(parent) { const s = parent.addStack(); s.layoutVertically(); return s; }
+function icon(stack, md, size) { stack.addImage(drawIcon(md.off, size)).imageSize = new Size(size, size); }
+function qname(q) { return q.name + ' · ' + q.id; }
 
-function messageWidget(ctx, title, body) {
-  const w = baseWidget(ctx);
+function messageWidget(title, body) {
+  const w = baseWidget();
   text(w, title, 15, 'bold');
   w.addSpacer(4);
   const b = text(w, body, 12, 'semibold', dyn(C.muted)); b.lineLimit = 4;
@@ -164,26 +325,233 @@ function messageWidget(ctx, title, body) {
   return w;
 }
 
-function smallCountdown(ctx, q, md, now) {
-  const w = baseWidget(ctx);
-  const top = w.addStack(); top.layoutHorizontally(); top.centerAlignContent();
-  top.addImage(drawIcon(md.off, 26)).imageSize = new Size(26, 26);
-  top.addSpacer();
-  text(top, q.name + ' · ' + q.id, 11, 'bold', dyn(C.muted));
+// ---------- small ----------
+function smallCountdown(q, md) {
+  const w = baseWidget();
+  const top = hstack(w); icon(top, md, 26); top.addSpacer(); text(top, qname(q), 11, 'bold', dyn(C.muted));
   w.addSpacer();
-  if (md.at) {
-    const dt = w.addDate(md.at); dt.applyTimerStyle();
-    dt.font = Font.heavyRoundedSystemFont(34); dt.textColor = dyn(C.fg); dt.lineLimit = 1; dt.minimumScaleFactor = 0.5;
-    text(w, md.cdl, 12, 'semibold', dyn(C.muted));
-  } else {
-    text(w, md.title, 22, 'heavy');
-  }
+  if (md.at) { timer(w, md, 34); text(w, md.cdl, 12, 'semibold', dyn(C.muted)); } else text(w, md.title, 22, 'heavy');
   w.addSpacer();
   text(w, md.sub, 12.5, 'bold');
-  w.addSpacer(6);
-  w.addImage(drawBar(md.v.today, md.v.minutes, true, 142, 8)).imageSize = new Size(142, 16);
+  w.addSpacer(5);
+  addBar(w, md.v.today, { w: 142, h: 8, m: md.m });
   return w;
 }
+
+function centered(w, build) {
+  const row = hstack(w); row.addSpacer();
+  const col = vstack(row); build(col);
+  row.addSpacer();
+}
+function smallTimer(q, md) {
+  const w = baseWidget();
+  w.setPadding(0, 0, 0, 0);
+  w.backgroundImage = drawTimerRing(md, 170, 14);
+  w.addSpacer();
+  centered(w, (col) => {
+    const ir = hstack(col); ir.addSpacer(); icon(ir, md, 22); ir.addSpacer();
+    col.addSpacer(3);
+    const tr = hstack(col); tr.addSpacer();
+    if (md.at) timer(tr, md, 24).centerAlignText(); else text(tr, md.title, 16, 'heavy');
+    tr.addSpacer();
+    const sr = hstack(col); sr.addSpacer(); text(sr, md.untilShort ? md.verb + ' о ' + S.hm(md.until) : q.name, 10.5, 'bold', dyn(C.muted)); sr.addSpacer();
+  });
+  w.addSpacer();
+  return w;
+}
+
+function smallRing(q, md) {
+  const w = baseWidget();
+  w.setPadding(0, 0, 0, 0);
+  w.backgroundImage = drawDayRing(md.v.today, md.m, 170, 13, true);
+  w.addSpacer();
+  centered(w, (col) => {
+    const a = hstack(col); a.addSpacer(); text(a, md.untilShort ? md.verb + (md.v.status.tomorrow ? ' завтра' : '') : md.title, 10, 'bold', dyn(C.muted)); a.addSpacer();
+    const b = hstack(col); b.addSpacer(); text(b, md.until != null ? S.hm(md.until) : '—', 24, 'heavy'); b.addSpacer();
+    if (md.at) { const c = hstack(col); c.addSpacer(); timer(c, md, 11).font = Font.boldSystemFont(11); c.addSpacer(); }
+  });
+  w.addSpacer();
+  return w;
+}
+
+function smallTile(q, md) {
+  const w = baseWidget();
+  w.backgroundColor = md.off ? new Color(C.heroOff) : dyn(C.heroOn);
+  w.backgroundImage = drawTileBg(md.off, 170, 170);
+  const fg = md.off ? new Color('#FFFFFF') : dyn(C.fg), mu = md.off ? new Color('#FFFFFF', 0.7) : dyn(C.muted);
+  const top = hstack(w); icon(top, md, 26); top.addSpacer(); text(top, qname(q), 11, 'bold', mu);
+  w.addSpacer();
+  text(w, md.title, 15, 'bold', fg);
+  text(w, md.until != null ? 'до ' + S.hm(md.until) : 'до кінця дня', 30, 'heavy', fg);
+  if (md.at) { const r = hstack(w); text(r, (md.v.status.tomorrow ? 'завтра · ' : '') + 'ще', 12, 'semibold', mu); r.addSpacer(3); timer(r, md, 12, mu).font = Font.semiboldSystemFont(12); }
+  return w;
+}
+
+// ---------- medium ----------
+function heroRow(parent, md, opts) {
+  const r = hstack(parent);
+  icon(r, md, opts.icon || 36); r.addSpacer(10);
+  const c = vstack(r); text(c, md.title, 16, 'heavy', opts.fg); text(c, md.sub, 12.5, 'semibold', opts.mu || dyn(C.muted));
+  r.addSpacer();
+  if (md.at) { const t = vstack(r); timer(t, md, opts.timer || 22, opts.fg).rightAlignText(); }
+  return r;
+}
+
+function mediumLine(q, md, now) {
+  const w = baseWidget();
+  heroRow(w, md, {});
+  w.addSpacer();
+  addBar(w, md.v.today, { w: 336, h: 20, m: md.m, notches: true, marks: true });
+  w.addSpacer(4);
+  const f = hstack(w); text(f, qname(q), 11, 'bold', dyn(C.muted)); f.addSpacer(); text(f, 'сьогодні без світла ' + S.durLong(totalOff(md.v.today)), 11, 'bold', dyn(C.muted));
+  return w;
+}
+
+function dayBlock(parent, label, list, o) {
+  const c = vstack(parent);
+  const h = hstack(c); text(h, label, 10.5, 'bold', dyn(C.muted)); h.addSpacer();
+  text(h, list ? (totalOff(list) ? S.durLong(totalOff(list)) + ' без світла' : 'без відключень') : 'ще не опубліковано', 10.5, 'bold', dyn(C.muted));
+  c.addSpacer(2);
+  if (list) addBar(c, list, o);
+  else { const e = hstack(c); e.size = new Size(o.w, o.h + 4); e.backgroundColor = new Color(C.track, 0.15); e.cornerRadius = 4; }
+}
+
+function mediumTwoDays(q, md, now) {
+  const w = baseWidget();
+  const row = hstack(w); row.topAlignContent();
+  const left = vstack(row); left.size = new Size(92, 142);
+  icon(left, md, 26); left.addSpacer();
+  text(left, md.untilShort ? md.verb + (md.v.status.tomorrow ? ' завтра' : '') : md.title, 10.5, 'bold', dyn(C.muted));
+  text(left, md.until != null ? S.hm(md.until) : '—', 26, 'heavy');
+  if (md.at) timer(left, md, 12).font = Font.boldSystemFont(12);
+  left.addSpacer();
+  text(left, qname(q), 10.5, 'bold', dyn(C.muted));
+  row.addSpacer(12);
+  const right = vstack(row);
+  right.addSpacer(8);
+  dayBlock(right, 'Сьогодні · ' + dayLabel(now, 0), md.v.today, { w: 230, h: 13, m: md.m, marks: true });
+  right.addSpacer(8);
+  dayBlock(right, 'Завтра · ' + dayLabel(now, 1), md.v.tomorrow, { w: 230, h: 13, isToday: false, marks: true });
+  return w;
+}
+
+function mediumNext(q, md) {
+  const w = baseWidget();
+  w.setPadding(10, 10, 10, 14);
+  const row = hstack(w);
+  const tile = vstack(row); tile.size = new Size(136, 150); tile.cornerRadius = 16; tile.setPadding(12, 12, 12, 12);
+  tile.backgroundColor = md.off ? new Color(C.heroOff) : dyn(C.heroOn);
+  tile.backgroundImage = drawTileBg(md.off, 136, 150);
+  const fg = md.off ? new Color('#FFFFFF') : dyn(C.fg), mu = md.off ? new Color('#FFFFFF', 0.7) : dyn(C.muted);
+  icon(tile, md, 26); tile.addSpacer();
+  text(tile, md.title, 13, 'bold', fg);
+  text(tile, md.until != null ? 'до ' + S.hm(md.until) : 'до кінця дня', 24, 'heavy', fg);
+  if (md.at) { const r = hstack(tile); text(r, (md.v.status.tomorrow ? 'завтра · ' : '') + 'ще', 11, 'semibold', mu); r.addSpacer(3); timer(r, md, 11, mu).font = Font.semiboldSystemFont(11); }
+  row.addSpacer(12);
+  const list = vstack(row);
+  text(list, 'Далі без світла · ' + qname(q), 10.5, 'bold', dyn(C.muted));
+  list.addSpacer(6);
+  const items = md.next.slice(0, 3);
+  if (!items.length) text(list, md.v.tomorrow ? 'Відключень більше немає' : 'Графіка на завтра ще немає', 12.5, 'semibold');
+  items.forEach((x, i) => {
+    const r = hstack(list);
+    text(r, S.hm(x.iv[0]) + '–' + S.hm(x.iv[1]), 13, 'bold'); r.addSpacer(6);
+    text(r, x.tom ? 'завтра' : S.durLong(x.iv[1] - x.iv[0]), 11.5, 'semibold', dyn(C.muted));
+    r.addSpacer();
+    if (i === 0 && !x.tom && md.off) pill(r, 'зараз');
+    list.addSpacer(7);
+  });
+  return w;
+}
+function pill(stack, str) {
+  const p = stack.addStack(); p.backgroundColor = new Color(C.amber); p.cornerRadius = 6; p.setPadding(2, 6, 2, 6);
+  const t = p.addText(str); t.font = Font.heavySystemFont(11); t.textColor = new Color('#15171B');
+}
+
+// ---------- large ----------
+function largeMac(q, md, now) {
+  const w = baseWidget();
+  const tile = vstack(w); tile.cornerRadius = 16; tile.setPadding(12, 14, 12, 14); tile.size = new Size(336, 64);
+  tile.backgroundColor = md.off ? new Color(C.heroOff) : dyn(C.heroOn);
+  tile.backgroundImage = drawTileBg(md.off, 336, 64);
+  heroRow(tile, md, { icon: 38, timer: 20, fg: md.off ? new Color('#FFFFFF') : dyn(C.fg), mu: md.off ? new Color('#FFFFFF', 0.75) : dyn(C.muted) });
+  w.addSpacer(12);
+  addBar(w, md.v.today, { w: 336, h: 22, m: md.m, notches: true, marks: true });
+  w.addSpacer(8);
+  (md.v.today.length ? md.v.today : []).slice(0, 5).forEach((iv) => {
+    const past = iv[1] <= md.m, now_ = md.m >= iv[0] && md.m < iv[1];
+    const r = hstack(w);
+    text(r, S.hm(iv[0]) + ' – ' + S.hm(iv[1]), 13, 'bold', past ? dyn(C.muted) : null).textOpacity = past ? 0.6 : 1;
+    r.addSpacer(8);
+    text(r, past ? 'минуло' : S.durLong(iv[1] - iv[0]), 11.5, 'semibold', dyn(C.muted));
+    r.addSpacer();
+    if (now_) pill(r, 'зараз');
+    w.addSpacer(5);
+  });
+  if (!md.v.today.length) text(w, 'Сьогодні відключень немає', 13, 'semibold', dyn(C.muted));
+  w.addSpacer();
+  dayBlock(w, 'Завтра · ' + dayLabel(now, 1), md.v.tomorrow, { w: 336, h: 12, isToday: false, marks: true });
+  w.addSpacer(6);
+  const f = hstack(w); text(f, qname(q), 11, 'bold', dyn(C.muted)); f.addSpacer(); text(f, 'Svitlo', 11, 'bold', dyn(C.muted));
+  return w;
+}
+
+function largeTwoDays(q, md, now) {
+  const w = baseWidget();
+  const top = hstack(w);
+  const ring = top.addStack(); ring.size = new Size(92, 92); ring.backgroundImage = drawTimerRing(md, 92, 10); ring.centerAlignContent();
+  ring.layoutVertically(); ring.addSpacer();
+  const rr = hstack(ring); rr.addSpacer(); if (md.at) timer(rr, md, 15); else icon(rr, md, 26); rr.addSpacer();
+  ring.addSpacer();
+  top.addSpacer(14);
+  const c = vstack(top); text(c, md.title, 18, 'heavy'); text(c, md.sub, 13, 'semibold', dyn(C.muted)); c.addSpacer(4); text(c, qname(q), 11, 'bold', dyn(C.muted));
+  top.addSpacer();
+  w.addSpacer();
+  dayBlock(w, 'Сьогодні · ' + dayLabel(now, 0), md.v.today, { w: 336, h: 24, m: md.m, notches: true, marks: true });
+  w.addSpacer();
+  dayBlock(w, 'Завтра · ' + dayLabel(now, 1), md.v.tomorrow, { w: 336, h: 24, isToday: false, notches: true, marks: true });
+  w.addSpacer();
+  return w;
+}
+
+// ---------- lock screen (iOS tints these; draw in white + alpha) ----------
+function lockWidget(family, q, md) {
+  const w = new ListWidget();
+  w.url = URLScheme.forRunningScript();
+  w.addAccessoryWidgetBackground = family === 'accessoryCircular';
+  if (family === 'accessoryInline') {
+    const d = ctxOf(16, 16); drawBolt(d, md.off, 0, 0, 16, true);
+    w.addImage(d.getImage());
+    w.addText(md.until != null ? (md.off ? 'Світла немає до ' : 'Світло до ') + md.untilShort : md.title);
+    return w;
+  }
+  if (family === 'accessoryCircular') {
+    w.backgroundImage = drawTimerRing(md, 72, 6, true);
+    w.addSpacer();
+    const a = hstack(w); a.addSpacer(); text(a, md.until != null ? S.hm(md.until) : '—', 13, 'heavy', new Color('#FFFFFF')); a.addSpacer();
+    const b = hstack(w); b.addSpacer(); text(b, md.off ? 'увімк.' : 'вимк.', 9, 'semibold', new Color('#FFFFFF', 0.8)); b.addSpacer();
+    w.addSpacer();
+    return w;
+  }
+  // accessoryRectangular
+  const r = hstack(w);
+  const d = ctxOf(14, 14); drawBolt(d, md.off, 0, 0, 14, true); r.addImage(d.getImage()).imageSize = new Size(13, 13);
+  r.addSpacer(4);
+  text(r, md.until != null ? (md.off ? 'немає до ' : 'до ') + S.hm(md.until) : md.title, 14, 'bold', new Color('#FFFFFF'));
+  r.addSpacer();
+  if (md.at) timer(r, md, 12, new Color('#FFFFFF', 0.8)).font = Font.semiboldSystemFont(12);
+  w.addSpacer(4);
+  addBar(w, md.v.today, { w: 150, h: 8, m: md.m, mono: true });
+  w.addSpacer(2);
+  text(w, qname(q), 10, 'semibold', new Color('#FFFFFF', 0.75));
+  return w;
+}
+
+const RENDER = {
+  small: { countdown: smallCountdown, timer: smallTimer, ring: smallRing, tile: smallTile },
+  medium: { line: mediumLine, twodays: mediumTwoDays, next: mediumNext },
+  large: { mac: largeMac, twodays: largeTwoDays },
+};
 
 // next useful refresh: the next on/off switch (so the state flips on time), but at least every 15 min
 function refreshDate(md, now) {
@@ -192,16 +560,20 @@ function refreshDate(md, now) {
   return new Date(Math.max(t, now.getTime() + 60000));
 }
 
-async function buildWidget(ctx, st, cfg, family) {
-  const q = pickQueue(cfg, args.widgetParameter);
-  if (!q) return messageWidget(ctx, 'Svitlo', 'Натисніть, щоб обрати свою чергу.');
-  const data = await st.loadData();
+async function buildWidget(st, cfg, family, styleOverride) {
+  family = family || 'small';
+  const fam = family === 'extraLarge' ? 'large' : family;
+  const pp = parseParam(cfg, args.widgetParameter, fam);
+  const q = pp.queue;
+  if (!q) return messageWidget('Svitlo', 'Натисніть, щоб обрати свою чергу.');
+  const parsed = await st.loadData();
   const now = new Date();
-  if (!data.parsed) return messageWidget(ctx, 'Немає даних', 'Не вдалося завантажити графік. Перевірте інтернет.');
-  const md = model(data.parsed, q, now);
-  if (md.unknown) return messageWidget(ctx, q.name + ' · ' + q.id, 'Графіка на сьогодні ще немає.');
-  if (family && family !== 'small') return messageWidget(ctx, 'Svitlo', 'Цей розмір з\'явиться в наступній версії. Поки що додайте малий віджет.');
-  const w = smallCountdown(ctx, q, md, now);
+  if (!parsed) return messageWidget('Немає даних', 'Не вдалося завантажити графік. Перевірте інтернет.');
+  const md = model(parsed, q, now);
+  if (md.unknown) return messageWidget(qname(q), 'Графіка на сьогодні ще немає.');
+  let w;
+  if (fam.indexOf('accessory') === 0) w = lockWidget(fam, q, md);
+  else w = (RENDER[fam] || RENDER.small)[styleOverride || pp.style](q, md, now);
   w.refreshAfterDate = refreshDate(md, now);
   return w;
 }
@@ -227,7 +599,34 @@ async function askQueue(cfg) {
   return { name: name, id: id };
 }
 
-async function appMenu(ctx, st, cfg) {
+const FAMILY_NAMES = { small: 'Малий', medium: 'Середній', large: 'Великий' };
+const PRESENT = { small: 'presentSmall', medium: 'presentMedium', large: 'presentLarge' };
+
+async function chooseLooks(st, cfg) {
+  for (;;) {
+    const a = new Alert();
+    a.title = 'Вигляд віджетів';
+    a.message = 'Обраний вигляд стоїть у всіх віджетах цього розміру. Для окремого віджета можна вписати назву вигляду в поле Parameter (напр. «таймер»).';
+    const fams = Object.keys(STYLES);
+    fams.forEach((f) => a.addAction(FAMILY_NAMES[f] + ': ' + STYLES[f][cfg.styles[f] || DEFAULT_STYLE[f]][0]));
+    a.addCancelAction('Готово');
+    const i = await a.presentSheet();
+    if (i < 0) return;
+    const f = fams[i], ids = Object.keys(STYLES[f]);
+    const b = new Alert();
+    b.title = FAMILY_NAMES[f] + ' віджет';
+    b.message = 'Оберіть вигляд — одразу покажу, як він виглядає.';
+    ids.forEach((id) => b.addAction(((cfg.styles[f] || DEFAULT_STYLE[f]) === id ? '✓ ' : '') + STYLES[f][id][0]));
+    b.addCancelAction('Назад');
+    const k = await b.presentSheet();
+    if (k < 0) continue;
+    cfg.styles[f] = ids[k]; st.saveConfig(cfg);
+    const w = await buildWidget(st, cfg, f, ids[k]);
+    await w[PRESENT[f]]();
+  }
+}
+
+async function appMenu(st, cfg) {
   for (;;) {
     if (!cfg.queues.length) {
       const q = await askQueue(cfg);
@@ -235,24 +634,34 @@ async function appMenu(ctx, st, cfg) {
       cfg.queues.push(q); cfg.active = 0; st.saveConfig(cfg);
     }
     const a = new Alert();
+    const cur = cfg.queues[cfg.active];
     a.title = 'Svitlo';
-    a.message = 'У віджеті: ' + cfg.queues[cfg.active].name + ' · ' + cfg.queues[cfg.active].id + '\nВерсія ' + VERSION;
+    a.message = 'У віджеті: ' + qname(cur) + '\nВерсія ' + VERSION;
     a.addAction('Показати віджет');
-    cfg.queues.forEach((q, i) => a.addAction((i === cfg.active ? '✓ ' : '') + q.name + ' · ' + q.id));
+    a.addAction('Вигляд віджетів…');
+    cfg.queues.forEach((q, i) => a.addAction((i === cfg.active ? '✓ ' : '') + qname(q)));
     a.addAction('+ Додати чергу');
+    a.addAction('Перевірити оновлення');
     if (cfg.queues.length > 1) a.addDestructiveAction('Видалити чергу…');
     a.addCancelAction('Закрити');
     const i = await a.presentSheet();
     if (i < 0) return;
-    if (i === 0) { const w = await buildWidget(ctx, st, cfg, 'small'); await w.presentSmall(); continue; }
-    if (i <= cfg.queues.length) { cfg.active = i - 1; st.saveConfig(cfg); continue; }
-    if (i === cfg.queues.length + 1) {
+    if (i === 0) { const w = await buildWidget(st, cfg, 'small'); await w.presentSmall(); continue; }
+    if (i === 1) { await chooseLooks(st, cfg); continue; }
+    const qi = i - 2;
+    if (qi < cfg.queues.length) { cfg.active = qi; st.saveConfig(cfg); continue; }
+    if (qi === cfg.queues.length) {
       const q = await askQueue(cfg);
       if (q && !cfg.queues.some((x) => x.id === q.id && x.name === q.name)) { cfg.queues.push(q); cfg.active = cfg.queues.length - 1; st.saveConfig(cfg); }
       continue;
     }
+    if (qi === cfg.queues.length + 1) { // the loader re-downloads the core when started with ?update=1
+      const u = URLScheme.forRunningScript();
+      Safari.open(u + (u.indexOf('?') >= 0 ? '&' : '?') + 'update=1');
+      return;
+    }
     const r = new Alert(); r.title = 'Яку чергу видалити?';
-    cfg.queues.forEach((q) => r.addDestructiveAction(q.name + ' · ' + q.id));
+    cfg.queues.forEach((q) => r.addDestructiveAction(qname(q)));
     r.addCancelAction('Скасувати');
     const k = await r.presentSheet();
     if (k >= 0) { cfg.queues.splice(k, 1); cfg.active = 0; st.saveConfig(cfg); }
@@ -262,19 +671,16 @@ async function appMenu(ctx, st, cfg) {
 module.exports.VERSION = VERSION;
 module.exports.run = async function (ctx) {
   const st = store(ctx);
-  let cfg;
   try {
-    cfg = await st.loadConfig();
-    if (config.runsInWidget) {
-      Script.setWidget(await buildWidget(ctx, st, cfg, config.widgetFamily));
-    } else {
-      await appMenu(ctx, st, cfg);
-    }
+    const cfg = await st.loadConfig();
+    if (config.runsInWidget) Script.setWidget(await buildWidget(st, cfg, config.widgetFamily));
+    else await appMenu(st, cfg);
   } catch (e) {
     // show the error instead of a blank widget, so it can be screenshotted and reported
-    const w = messageWidget(ctx, 'Svitlo ' + VERSION + ': помилка', String(e && e.message || e));
+    const w = messageWidget('Svitlo ' + VERSION + ': помилка', String((e && e.message) || e));
     if (config.runsInWidget) Script.setWidget(w); else await w.presentSmall();
   }
   Script.complete();
 };
-module.exports._test = { pickQueue: pickQueue, model: model, refreshDate: refreshDate };
+// for the simulator
+module.exports._test = { parseParam: parseParam, model: model, refreshDate: refreshDate, buildWidget: buildWidget, store: store, STYLES: STYLES };
