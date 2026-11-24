@@ -50,6 +50,16 @@
 
 На Mac автооновлення немає: macOS не дозволяє його для застосунків без платного підпису Apple. Нову версію ставте так само вручну.
 
+### iPhone (віджет, бета)
+Працює через безкоштовний застосунок [Scriptable](https://apps.apple.com/app/scriptable/id1405459188).
+1. Встановіть Scriptable з App Store і відкрийте його.
+2. Натисніть **+**, вставте вміст [`ios/Svitlo.js`](https://raw.githubusercontent.com/vladyslav-deda/svitlo-widget/ios-stable/ios/Svitlo.js) і назвіть скрипт `Svitlo`.
+3. Запустіть скрипт (▶︎) і оберіть свою чергу.
+4. На домашньому екрані затисніть порожнє місце → **+** → Scriptable → малий віджет. Затисніть віджет → «Змінити віджет» → Script: **Svitlo**.
+
+Скрипт — лише завантажувач: сам віджет він бере з гілки `ios-stable` і оновлює кожні кілька годин, тож перевстановлювати нічого не треба.
+Щоб віджет показував іншу чергу, впишіть її назву або номер у полі **Parameter** («Батьки» чи «3.1»).
+
 ### Перший запуск
 Відкриється вікно вибору черги. Не знаєте свою чергу? Знайдіть її за адресою на [disconnection.voe.com.ua](https://disconnection.voe.com.ua).
 
@@ -90,6 +100,14 @@ npm run build:win  # dist/Svitlo-Setup-<версія>.exe
 2. `npm run release`. Потрібен [GitHub CLI](https://cli.github.com) з `gh auth login`.
 
 Скрипт [`scripts/release.sh`](scripts/release.sh) проганяє тести, публікує інсталятор Windows разом з `latest.yml` (з нього читає автооновлення) і додає до релізу zip для Mac.
+
+### iPhone-віджет
+Код — у `ios/src/widget.js`, логіка графіка спільна з десктопом (`src/schedule.js`).
+```sh
+node scripts/build-ios.js   # зібрати ios/core.js (один файл, який завантажують телефони)
+node scripts/ios-sim.js --now 2026-11-24T14:05:00+02:00 --dark --out /tmp/w.html   # симулятор Scriptable
+```
+Телефони беруть `ios/core.js` з гілки `ios-stable`. Випуск: перевірити, закомітити в `main`, потім `git push origin main:ios-stable`.
 
 ### Змінні середовища для налагодження
 | Змінна | Що робить |
