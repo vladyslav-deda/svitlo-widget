@@ -1,0 +1,69 @@
+{
+  "name": "svitlo-widget",
+  "productName": "Svitlo",
+  "version": "1.1.0",
+  "description": "Графік відключень світла (Вінницяобленерго) у меню-барі та треї",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "icons": "node scripts/make-icons.js",
+    "build:mac": "electron-builder --mac dir --arm64",
+    "build:win": "electron-builder --win nsis --x64",
+    "release:win": "electron-builder --win nsis --x64 --publish always",
+    "release": "bash scripts/release.sh"
+  },
+  "build": {
+    "appId": "ua.svitlo.widget",
+    "productName": "Svitlo",
+    "files": [
+      "src/**",
+      "assets/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "icon": "assets/icon.png",
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "icon": "assets/icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": false,
+      "shortcutName": "Svitlo",
+      "artifactName": "Svitlo-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "vladyslav-deda",
+        "repo": "svitlo-widget",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vladyslav-deda/svitlo-widget.git"
+  },
+  "license": "MIT"
+}

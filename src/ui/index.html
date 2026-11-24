@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>Світло</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="panel" id="panel" role="dialog" aria-label="Графік відключень">
+
+  <!-- ================= main screen ================= -->
+  <section class="screen" id="scrMain">
+    <div class="chips stg" id="chips"></div>
+
+    <div class="fade col" id="qFade">
+      <div class="hero stg on" id="hero" style="animation-delay:40ms">
+        <div class="hero-ico">
+          <svg class="i-on" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+          <svg class="i-off" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/><path d="M3 3l18 18"/></svg>
+          <svg class="i-unk" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+        <div class="hero-text">
+          <span class="hero-title" id="heroTitle">—</span>
+          <span class="hero-sub" id="heroSub"></span>
+        </div>
+        <div class="hero-right" id="heroRight">
+          <span class="hero-big tk-a" id="heroBig"></span>
+          <span class="hero-cap" id="heroCap"></span>
+        </div>
+      </div>
+
+      <div class="tabs stg" style="animation-delay:80ms">
+        <span class="tabs-pill" id="tabsPill"></span>
+        <button id="tabToday" aria-pressed="true">Сьогодні</button>
+        <button id="tabTom" aria-pressed="false">Завтра</button>
+      </div>
+
+      <div class="fade col stg" id="tabFade" style="animation-delay:120ms">
+        <div class="col" id="dayBox">
+          <div class="tl" id="tl">
+            <div class="tip" id="tip" role="status" aria-live="polite"></div>
+            <div class="tl-bar" id="bar" tabindex="0" aria-label="Графік доби. Наведіть курсор або використовуйте стрілки">
+              <div class="notches" id="notches"></div>
+              <span class="cur-x" id="curX"></span>
+              <div class="marker" id="marker"><span class="marker-line"></span><span class="marker-dot"></span></div>
+            </div>
+            <div class="marks" id="marks"></div>
+          </div>
+          <div class="rows" id="rows"></div>
+        </div>
+        <div class="empty" id="dayMissing">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+          <b id="missTitle">Графік ще не опубліковано</b>
+          <span id="missText">Зазвичай з'являється ввечері. Віджет оновиться сам</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot stg" style="animation-delay:160ms">
+      <span class="foot-l"><span class="qtag" id="qtag"></span><span id="updated"></span></span>
+      <span class="foot-r">
+        <button class="ibtn" id="btnRefresh" title="Оновити" aria-label="Оновити"><svg id="spin" class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button>
+        <button class="ibtn" id="btnSite" title="Сайт Вінницяобленерго" aria-label="Сайт Вінницяобленерго"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg></button>
+        <button class="ibtn" id="btnQuit" title="Вийти" aria-label="Вийти"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg></button>
+      </span>
+    </div>
+  </section>
+
+  <!-- ================= add-queue screen ================= -->
+  <section class="screen away-r" id="scrAdd">
+    <div class="hdr">
+      <button class="ibtn boxed" id="addBack" aria-label="Назад"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+      <span class="hdr-t" id="addTitle">Нова черга</span>
+    </div>
+    <p class="lead" id="firstRun">Оберіть свою чергу — і графік з'явиться в меню-барі.</p>
+    <label class="field">Назва
+      <input class="inp" id="newName" maxlength="24" placeholder="Напр. Дім" autocomplete="off">
+    </label>
+    <div class="field">
+      <span>Черга</span>
+      <div class="qgrid" id="qgrid"></div>
+    </div>
+    <div class="info">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>Не знаєте свою чергу? Знайдіть за адресою на <button class="link" id="voeLink">disconnection.voe.com.ua</button></span>
+    </div>
+    <div class="rows" id="savedBox">
+      <span class="sec">Збережені</span>
+      <div class="col tight" id="saved"></div>
+    </div>
+    <div class="btns">
+      <button class="btn" id="addCancel">Скасувати</button>
+      <button class="btn primary" id="addOk" disabled>Додати чергу</button>
+    </div>
+  </section>
+</div>
+<script src="../schedule.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
